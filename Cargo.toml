@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/hulk-ast",
+    "crates/hulk-lexer",
+    "crates/hulk-parser",
+    "crates/hulk-checker",
+    "crates/hulk-vm",
+    "crates/hulk-cli",
+]
