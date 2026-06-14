@@ -1,0 +1,1 @@
+/Users/ingram/Escuela\ 2/Compilacion/target/debug/libhulk_parser.rlib: /Users/ingram/Escuela\ 2/Compilacion/crates/hulk-ast/src/lib.rs /Users/ingram/Escuela\ 2/Compilacion/crates/hulk-lexer/src/lib.rs /Users/ingram/Escuela\ 2/Compilacion/crates/hulk-parser/src/lib.rs
