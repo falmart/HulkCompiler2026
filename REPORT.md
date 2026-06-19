@@ -193,11 +193,11 @@ Se usa `Rc<RefCell<...>>` para estado mutable compartido (los objetos y arreglos
 
 ---
 
-## Funcionalidades Extra (Bonus)
+## Funcionalidades Extra
 
 Además de los requisitos mínimos del lenguaje HULK, el compilador implementa las siguientes extensiones, todas verificadas con tests de la suite oficial:
 
-### Macros (`ok/macros` — 8/8 tests)
+### Macros 
 
 El sistema de macros permite definir transformaciones a nivel de AST que se expanden en el sitio de llamada, en lugar de ejecutarse como funciones normales. Se soportan cuatro modos de paso de parámetros:
 
@@ -208,7 +208,7 @@ El sistema de macros permite definir transformaciones a nivel de AST que se expa
 
 La palabra clave `define` es un atajo para macros call-by-name puros: todos sus parámetros son ByName automáticamente, lo que permite definir estructuras de control personalizadas como nuevas palabras clave. La forma `match(expr) { case (pat) => ...; default => ...; }` permite selección de ramas dentro del cuerpo de un macro.
 
-### Arreglos (`ok/arrays` — 8/8 tests)
+### Arreglos
 
 Además de la sintaxis básica `new T[n]`, se soporta:
 
@@ -216,15 +216,15 @@ Además de la sintaxis básica `new T[n]`, se soporta:
 - **Inicialización con función índice**: `new Number[5] { i -> i * i }` — la expresión se evalúa una vez por posición con `i` vinculado al índice actual.
 - **Arreglos 2D**: `new Number[][3]` crea un arreglo de 3 posiciones donde cada elemento puede ser a su vez un `Number[]`. La anotación de tipo `Number[][]` se verifica correctamente contra este tipo de expresión.
 
-### Interfaces (`ok/interfaces` — 6/6 tests)
+### Interfaces
 
 La palabra clave `interface` funciona como alias exacto de `protocol`. Ambas formas producen el mismo nodo AST (`ProtocolDecl`) y son completamente intercambiables. El tipado estructural aplica igual en ambos casos: una clase satisface una interfaz si implementa todos sus métodos, sin necesidad de declararlo explícitamente.
 
-### Lambdas (`ok/lambdas` — 6/6 tests)
+### Lambdas
 
 Además de la sintaxis `(x) => expr`, se soporta la forma `function(x) -> expr` como expresión anónima en cualquier posición donde se esperaría un valor. Las lambdas capturan el entorno léxico (closures), pueden pasarse como argumentos, retornarse como valores y componerse en funciones de orden superior. Ejemplos soportados: `map`, `filter`, `compose`, `apply`.
 
-### Generadores (`ok/generators` — 6/6 tests)
+### Generadores
 
 Una clase puede actuar como generador (secuencia perezosa) implementando dos métodos:
 
