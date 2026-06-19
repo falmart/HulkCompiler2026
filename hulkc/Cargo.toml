@@ -1,0 +1,14 @@
+[package]
+name = "hulkc"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hulkc"
+path = "src/main.rs"
+
+[dependencies]
+hulk_lexer       = { path = "../crates/hulk_lexer" }
+hulk_parser      = { path = "../crates/hulk_parser" }
+hulk_semantic    = { path = "../crates/hulk_semantic" }
+hulk_interpreter = { path = "../crates/hulk_interpreter" }

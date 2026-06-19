@@ -1,0 +1,8 @@
+[package]
+name = "hulk_parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hulk_lexer = { path = "../hulk_lexer" }
+hulk_ast   = { path = "../hulk_ast" }
