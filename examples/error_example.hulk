@@ -1,0 +1,5 @@
+// This file has intentional semantic errors — useful for testing error output
+
+function broken(x: Number): Boolean -> x + 1;  // returns Number, not Boolean
+
+let y = undefined_var in y;

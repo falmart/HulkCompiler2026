@@ -1,0 +1,9 @@
+// Recursive Fibonacci
+function fib(n: Number): Number ->
+    if (n <= 1) n else fib(n - 1) + fib(n - 2);
+
+let i = 0 in
+while (i <= 10) {
+    print(fib(i));
+    i := i + 1;
+};

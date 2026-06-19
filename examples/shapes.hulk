@@ -1,0 +1,33 @@
+// Object-oriented shapes example
+
+class Shape {
+    area(): Number -> 0;
+    describe(): String -> "Shape with area " @ self.area().toString();
+}
+
+class Circle(r: Number) is Shape {
+    r := r;
+    area(): Number -> 3 * r * r;
+}
+
+class Rectangle(w: Number, h: Number) is Shape {
+    w := w;
+    h := h;
+    area(): Number -> w * h;
+}
+
+class Triangle(base: Number, height: Number) is Shape {
+    base   := base;
+    height := height;
+    area(): Number -> base * height / 2;
+}
+
+let c = new Circle(5)          in
+let r = new Rectangle(4, 6)    in
+let t = new Triangle(3, 8)     in
+{
+    print("Circle area:    " @@ c.area().toString());
+    print("Rectangle area: " @@ r.area().toString());
+    print("Triangle area:  " @@ t.area().toString());
+    print("Total:          " @@ (c.area() + r.area() + t.area()).toString());
+};

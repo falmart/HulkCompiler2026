@@ -1,8 +1,0 @@
-[package]
-name = "hulk-parser"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-hulk-ast = { path = "../hulk-ast" }
-hulk-lexer = { path = "../hulk-lexer" }

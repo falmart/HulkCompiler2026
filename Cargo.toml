@@ -1,9 +1,7 @@
 [workspace]
+resolver = "2"
 members = [
-    "crates/hulk-ast",
-    "crates/hulk-lexer",
-    "crates/hulk-parser",
-    "crates/hulk-checker",
-    "crates/hulk-vm",
-    "crates/hulk-cli",
+    "crates/hulk_lexer",
+    "crates/hulk_ast",
+    "hulkc", "crates/hulk_parser", "crates/hulk_semantic", "crates/hulk_interpreter",
 ]

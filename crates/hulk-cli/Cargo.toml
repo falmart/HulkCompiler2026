@@ -1,9 +1,0 @@
-[package]
-name = "hulk-cli"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-hulk-parser = { path = "../hulk-parser" }
-hulk-checker = { path = "../hulk-checker" }
-hulk-vm = { path = "../hulk-vm" }
