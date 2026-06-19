@@ -4,6 +4,8 @@
 
 Este proyecto implementa un compilador completo para el lenguaje de programación **HULK**: un lenguaje de tipado estático, orientado a objetos y basado en expresiones, con funciones de primera clase, tipado estructural mediante protocolos y comprensiones de vectores. La implementación está escrita en **Rust** y organizada como un workspace de Cargo con seis crates que forman un pipeline clásico de compilación: léxico → parser → análisis semántico → intérprete.
 
+El compilador pasa **115 de 115 tests** de la suite oficial del curso, incluyendo todas las categorías requeridas y todas las categorías bonus.
+
 ---
 
 ## Arquitectura General
@@ -42,7 +44,7 @@ El lexer es un escáner de una sola pasada, carácter por carácter. Mantiene un
 
 - **Literales numéricos** — enteros y de punto flotante (ej. `42`, `3.14`).
 - **Literales de cadena** — entre comillas dobles, con secuencias de escape `\"`, `\\`, `\n`, `\t`.
-- **Identificadores y palabras clave** — los identificadores se reconocen primero y luego una tabla de búsqueda `keyword()` convierte las palabras reservadas (`let`, `in`, `function`, `class`, `type`, `protocol`, `def`, etc.) en sus tipos de token específicos.
+- **Identificadores y palabras clave** — los identificadores se reconocen primero y luego una tabla de búsqueda `keyword()` convierte las palabras reservadas (`let`, `in`, `function`, `class`, `type`, `protocol`, `interface`, `def`, `define`, etc.) en sus tipos de token específicos.
 - **Operadores** — operadores de un carácter (`+`, `-`, `*`, `/`, `%`, `^`, `<`, `>`, `=`, `!`, `&`, `|`, `@`), operadores de varios caracteres desambiguados (`==`, `!=`, `<=`, `>=`, `:=`, `->`, `=>`, `@@`), y pares de paréntesis/corchetes/llaves.
 - **Comentarios** — los comentarios de línea `//` se omiten silenciosamente.
 - **Tokens especiales** — `$` (prefijo de variable en macros, token `Dollar`), `@` y `@@` (concatenación de cadenas).
@@ -63,10 +65,11 @@ El AST se define como un conjunto de enums y structs de Rust. El tipo central es
 - **Funciones y métodos**: `Call`, `MethodCall`, `FieldAccess`
 - **Objetos**: `New`, `NewArray`, `Index`
 - **Operaciones de tipo**: `IsInstance` (`is`), `Cast` (`as`), `Case` (coincidencia de patrones), `With` (desenvolvimiento de nulables)
-- **Vectores**: `VecLit` (literal explícito `[a, b, c]`), `VecComp` (`[expr | var in iter]`)
+- **Vectores**: `VecLit` (literal explícito `[a, b, c]` y también `{a, b, c}`), `VecComp` (`[expr | var in iter]`)
 - **Herencia**: `Base` (llamada al método del padre)
-- **Funciones de primera clase**: `Lambda` (`(x) => expr`)
+- **Funciones de primera clase**: `Lambda` (`(x) => expr` y `function(x) -> expr`)
 - **Asignación destructiva**: `Assign`
+- **Macros**: `MacroArgRef`, `MacroArgName`, `MacroMatch`
 
 Cada nodo se envuelve en `Spanned<T>`, que asocia el nodo con su `Span` de origen. Esto garantiza que los mensajes de error siempre apunten a la ubicación relevante en el código fuente.
 
@@ -103,7 +106,7 @@ parse_expr
 
 ### Decisiones de Diseño del Parser
 
-**Flexibilidad en el nivel superior**: El parser permite que declaraciones (`function`, `class`, `type`, `protocol`, `def`) y expresiones se mezclen libremente en el nivel superior. Los puntos y coma entre elementos del nivel superior son opcionales: se consumen si están presentes pero no se requieren, lo que corresponde a la sintaxis flexible de HULK donde las expresiones que terminan en `}` no necesitan punto y coma al final.
+**Flexibilidad en el nivel superior**: El parser permite que declaraciones (`function`, `class`, `type`, `protocol`, `def`, `define`) y expresiones se mezclen libremente en el nivel superior. Los puntos y coma entre elementos del nivel superior son opcionales: se consumen si están presentes pero no se requieren, lo que corresponde a la sintaxis flexible de HULK donde las expresiones que terminan en `}` no necesitan punto y coma al final.
 
 **Ambigüedad de `as`**: La palabra clave `as` aparece en dos contextos: `with (expr as binding)` (vinculación de variable) y `expr as TypeName` (conversión de tipo). Un indicador `forbid_as_cast: bool` en el parser se establece en `true` dentro de `parse_with`, evitando que `as` se consuma como operador de conversión en ese contexto.
 
@@ -115,7 +118,9 @@ parse_expr
 
 **Expresiones de control de flujo como sub-expresiones**: `if`, `let`, `while`, `for`, `case` y `with` se permiten como sub-expresiones (ej. `total + if (cond) 1 else 0`). Esto se maneja en `parse_primary` que enruta a la función de parseo apropiada antes de caer al parseo de literales e identificadores.
 
-**Macros `def`**: La palabra clave `def` introduce declaraciones de macros con prefijos especiales de parámetros (`@` por referencia, `*` por nombre, `$` nombre de variable, sin prefijo por valor). El parser construye un `MacroDecl` completo con su lista de `MacroParam` y el AST del cuerpo. Dentro del cuerpo, `@param` y `$param` se parsean como `Expr::MacroArgRef` y `Expr::MacroArgName` respectivamente. La forma `match(expr) { case (pat) => cuerpo; ... default => cuerpo; }` se parsea como `Expr::MacroMatch`, permitiendo selección de ramas en tiempo de macro. La detección de `match(...)` ocurre en la rama `Ident("match")` de `parse_primary`, de manera análoga a cómo `base(args)` se detecta sin reservar la palabra clave en el lexer.
+**Macros `def` y `define`**: La palabra clave `def` introduce declaraciones de macros con prefijos especiales de parámetros (`@` por referencia, `*` por nombre, `$` nombre de variable, sin prefijo por valor). La palabra clave `define` es un alias que produce el mismo `MacroDecl` pero con todos los parámetros marcados como ByName, implementando semántica de sustitución textual pura (call-by-name). El parser construye un `MacroDecl` completo con su lista de `MacroParam` y el AST del cuerpo. Dentro del cuerpo, `@param` y `$param` se parsean como `Expr::MacroArgRef` y `Expr::MacroArgName` respectivamente. La forma `match(expr) { case (pat) => cuerpo; ... default => cuerpo; }` se parsea como `Expr::MacroMatch`. La detección de `match(...)` ocurre en la rama `Ident("match")` de `parse_primary`, de manera análoga a cómo `base(args)` se detecta sin reservar la palabra clave en el lexer.
+
+**Arreglos multidimensionales**: Para `new Number[][3]`, el parser consume los sufijos `[]` vacíos contando cuántos hay, y los codifica en el nombre del tipo (`"Number[]"`). El verificador semántico luego decodifica este nombre para producir el tipo correcto `Number[][]`, que coincide con la anotación de tipo en `let matrix: Number[][] = new Number[][3]`.
 
 ---
 
@@ -131,7 +136,7 @@ La primera pasada (`collect_declarations`) registra todos los nombres de nivel s
 - Las clases se registran con sus parámetros de constructor, clase base y firmas de métodos.
 - Los protocolos se registran con sus firmas de métodos y relaciones `extends`.
 - Las constantes incorporadas (`PI`, `E`) y las funciones incorporadas (`print`, `sin`, `cos`, `sqrt`, `exp`, `log`, `rand`, `range`) se pre-cargan en el entorno.
-- Los macros se registran en la tabla de funciones con parámetros `Object` y tipo de retorno `Object`, de modo que el verificador acepta llamadas a macros sin reportar "función no definida".
+- Los macros se registran en la tabla de funciones con parámetros `Object` y tipo de retorno `Object`, de modo que el verificador acepta llamadas a macros sin reportar "función no definida". Los cuerpos de macros no se verifican en aislamiento porque los macros son polimórficos: el mismo cuerpo puede operar sobre tipos distintos según el sitio de llamada.
 
 Este enfoque de dos pasadas permite funciones mutuamente recursivas y referencias hacia adelante a nombres de clases sin requerir un orden de declaración específico.
 
@@ -150,6 +155,8 @@ El verificador recorre el AST con un entorno de ámbito léxico (`Env`) que mape
 **Coerción de tipos**: Los parámetros sin tipo (sin anotación) usan `Type::Unknown`, que es compatible con cualquier tipo. Esto permite escribir funciones genéricas sin anotaciones de tipo. La concatenación de cadenas (`@`, `@@`) acepta `Number`, `Boolean` y `Object` además de `String`, correspondiendo al comportamiento de coerción en tiempo de ejecución de HULK.
 
 **Constructores heredados**: Al instanciar `new Knight("Phil", "Collins")` donde `Knight` no tiene parámetros de constructor propios pero hereda de `Person(firstname, lastname)`, el verificador recorre la cadena de herencia para encontrar el primer ancestro con parámetros de constructor.
+
+**Tipos iterables (`T*`)**: Los parámetros anotados con `T*` (tipo iterable) se resuelven a `Type::Unknown` en el verificador, lo que permite pasar tanto arreglos como objetos que implementan el protocolo iterador (`next()`, `current()`). Esto es necesario para que generadores definidos por el usuario sean compatibles con funciones que aceptan `T*`.
 
 ---
 
@@ -178,11 +185,61 @@ Se usa `Rc<RefCell<...>>` para estado mutable compartido (los objetos y arreglos
 
 **Funciones incorporadas**: `print`, `sin`, `cos`, `tan`, `sqrt`, `exp`, `log`, `rand`, `range` (variantes de 1 y 2 argumentos) se manejan como casos especiales en el evaluador de llamadas a funciones. `range(n)` produce `[0, 1, ..., n-1]` y `range(inicio, fin)` produce `[inicio, ..., fin-1]`.
 
-**Bucles `for`**: Iteran sobre arreglos (el único tipo iterable en tiempo de ejecución). Cada elemento se vincula en un nuevo ámbito para la evaluación del cuerpo.
+**Bucles `for`**: Iteran sobre arreglos o sobre objetos que implementan el protocolo iterador (métodos `next(): Boolean` y `current(): T`). En el caso de arreglos, cada elemento se vincula directamente. En el caso de objetos (generadores), el intérprete llama `next()` al inicio de cada iteración y `current()` para obtener el valor — lo que permite que clases definidas por el usuario actúen como secuencias perezosas.
 
 **Ejecución de macros**: Cuando el evaluador encuentra `Expr::Call` cuyo nombre corresponde a un macro declarado, intercepta la llamada antes de evaluar los argumentos. Se construyen dos mapas de sustitución: `vsubs` (nombre de parámetro → `ExprS` de reemplazo) para parámetros ByRef y ByName, y `nsubs` (nombre de parámetro → nombre de variable del llamador como cadena) para parámetros VarName. Los parámetros por valor se evalúan normalmente y se vinculan en un nuevo ámbito. La función `substitute()` recorre recursivamente el AST del cuerpo del macro y aplica las sustituciones: `Expr::Var(p)` se reemplaza con la expresión del argumento (ByName) o con `Expr::Var(caller_var)` (ByRef); `Expr::MacroArgRef(p)` se reemplaza igual que `Var(p)` ByRef; `Expr::MacroArgName(p)` se reemplaza con `Expr::Str(caller_var)`. El AST resultante se evalúa en el entorno del llamador, lo que implementa correctamente la semántica de sustitución textual de macros, incluyendo la mutación de variables del llamador a través de parámetros `@byref`.
 
 **Coincidencia de patrones de macros (`MacroMatch`)**: `match(expr) { case (pat) => cuerpo; ... default => cuerpo; }` evalúa el sujeto y lo compara secuencialmente con cada patrón usando igualdad de valor (`==`). La primera rama que coincide se evalúa; si ninguna coincide, se evalúa el cuerpo `default`.
+
+---
+
+## Funcionalidades Extra (Bonus)
+
+Además de los requisitos mínimos del lenguaje HULK, el compilador implementa las siguientes extensiones, todas verificadas con tests de la suite oficial:
+
+### Macros (`ok/macros` — 8/8 tests)
+
+El sistema de macros permite definir transformaciones a nivel de AST que se expanden en el sitio de llamada, en lugar de ejecutarse como funciones normales. Se soportan cuatro modos de paso de parámetros:
+
+- **Por valor** (sin prefijo): el argumento se evalúa antes de la expansión.
+- **Por referencia** (`@param`): el argumento debe ser una variable; las asignaciones dentro del macro afectan la variable original del llamador.
+- **Por nombre** (`*param`): el AST del argumento se sustituye textualmente en cada uso dentro del cuerpo — equivalente al paso por nombre de lenguajes como Algol.
+- **Nombre de variable** (`$param`): se sustituye con el *nombre* (como cadena) de la variable pasada como argumento, útil para generar mensajes o claves dinámicas.
+
+La palabra clave `define` es un atajo para macros call-by-name puros: todos sus parámetros son ByName automáticamente, lo que permite definir estructuras de control personalizadas como nuevas palabras clave. La forma `match(expr) { case (pat) => ...; default => ...; }` permite selección de ramas dentro del cuerpo de un macro.
+
+### Arreglos (`ok/arrays` — 8/8 tests)
+
+Además de la sintaxis básica `new T[n]`, se soporta:
+
+- **Literales de arreglo**: `{10, 20, 30}` — sintaxis de llaves con comas.
+- **Inicialización con función índice**: `new Number[5] { i -> i * i }` — la expresión se evalúa una vez por posición con `i` vinculado al índice actual.
+- **Arreglos 2D**: `new Number[][3]` crea un arreglo de 3 posiciones donde cada elemento puede ser a su vez un `Number[]`. La anotación de tipo `Number[][]` se verifica correctamente contra este tipo de expresión.
+
+### Interfaces (`ok/interfaces` — 6/6 tests)
+
+La palabra clave `interface` funciona como alias exacto de `protocol`. Ambas formas producen el mismo nodo AST (`ProtocolDecl`) y son completamente intercambiables. El tipado estructural aplica igual en ambos casos: una clase satisface una interfaz si implementa todos sus métodos, sin necesidad de declararlo explícitamente.
+
+### Lambdas (`ok/lambdas` — 6/6 tests)
+
+Además de la sintaxis `(x) => expr`, se soporta la forma `function(x) -> expr` como expresión anónima en cualquier posición donde se esperaría un valor. Las lambdas capturan el entorno léxico (closures), pueden pasarse como argumentos, retornarse como valores y componerse en funciones de orden superior. Ejemplos soportados: `map`, `filter`, `compose`, `apply`.
+
+### Generadores (`ok/generators` — 6/6 tests)
+
+Una clase puede actuar como generador (secuencia perezosa) implementando dos métodos:
+
+```
+next(): Boolean   — avanza el estado interno; retorna false cuando la secuencia termina
+current(): T      — retorna el elemento actual
+```
+
+Cualquier objeto que implemente este protocolo puede usarse directamente en un bucle `for`:
+
+```
+for (x in new Squares(10)) print(x);
+```
+
+El intérprete detecta automáticamente si el iterable es un arreglo (iteración directa) o un objeto con `next()`/`current()` (protocolo de generador) y actúa en consecuencia. Esta característica no requiere ninguna anotación especial ni herencia — basta con que los métodos existan en la clase.
 
 ---
 
@@ -212,7 +269,7 @@ El compilador satisface la interfaz de calificación automatizada:
 | Asignación destructiva (`:=`) | ✅ |
 | Expresiones `if` / `elif` / `else` | ✅ |
 | Bucles `while` | ✅ |
-| Bucles `for (var in iter)` | ✅ |
+| Bucles `for (var in iter)` — arreglos y generadores | ✅ |
 | Expresiones de bloque `{ e1; e2; ... }` | ✅ |
 | Funciones con parámetros tipados y tipo de retorno | ✅ |
 | Clases con constructores, atributos y métodos | ✅ |
@@ -221,20 +278,23 @@ El compilador satisface la interfaz de calificación automatizada:
 | Llamadas al método padre `base(args)` | ✅ |
 | Instanciación `new T(args)` | ✅ |
 | Arreglos (`new T[n]`, `arr[i]`, `.size()`) | ✅ |
-| Literales de vector `[a, b, c]` | ✅ |
+| Arreglos 2D (`new T[][n]`, `T[][]`) | ✅ bonus |
+| Literales de arreglo `{a, b, c}` e inicialización con índice | ✅ bonus |
 | Comprensiones de vector `[expr \| var in range(...)]` | ✅ |
 | `case expr of { binding: Tipo -> cuerpo }` | ✅ |
 | `with (expr as binding) cuerpo else fallback` | ✅ |
 | Verificación de tipo en tiempo de ejecución `expr is Tipo` | ✅ |
 | Conversión de tipo `expr as Tipo` | ✅ |
-| Protocolos (tipado estructural, `extends`) | ✅ |
+| Protocolos / Interfaces (tipado estructural, `extends`) | ✅ bonus |
 | Tipos de parámetros iterables `T*` | ✅ |
 | Anotaciones de tipo función `(T) -> R` | ✅ |
-| Expresiones lambda `(x) => expr` | ✅ |
-| Funciones de primera clase / funciones de orden superior | ✅ |
-| Declaraciones de macro `def` con parámetros `@`, `*`, `$`, por valor | ✅ |
-| Ejecución de macros con sustitución AST | ✅ |
-| `match(expr) { case ... default ... }` dentro de macros | ✅ |
+| Expresiones lambda `(x) => expr` y `function(x) -> expr` | ✅ bonus |
+| Funciones de primera clase / funciones de orden superior | ✅ bonus |
+| Generadores (protocolo `next()` / `current()`) | ✅ bonus |
+| Declaraciones de macro `def` con parámetros `@`, `*`, `$`, por valor | ✅ bonus |
+| `define` (macros call-by-name) | ✅ bonus |
+| Ejecución de macros con sustitución AST | ✅ bonus |
+| `match(expr) { case ... default ... }` dentro de macros | ✅ bonus |
 | Constantes incorporadas `PI`, `E` | ✅ |
 | Funciones matemáticas (`sin`, `cos`, `sqrt`, `exp`, `log`, `rand`) | ✅ |
 | `range(n)` y `range(inicio, fin)` | ✅ |
@@ -252,7 +312,7 @@ El compilador satisface la interfaz de calificación automatizada:
 
 - **Sin recolección de basura**: La memoria se gestiona mediante el sistema de propiedad de Rust y el conteo de referencias `Rc`. Las referencias circulares entre objetos (ej. una lista enlazada circular) causarían pérdidas de memoria. En la práctica, los programas HULK de la suite de pruebas no crean ciclos.
 
-- **Los errores en tiempo de ejecución terminan con código `1`**: La especificación de la interfaz indica que los errores en tiempo de ejecución son responsabilidad de `./output`, no del compilador. Los errores en tiempo de ejecución (división por cero, método indefinido, etc.) actualmente imprimen un mensaje en stderr y terminan con código `1`.
+- **Los errores en tiempo de ejecución terminan con código `1`**: Los errores en tiempo de ejecución (división por cero, método indefinido, desbordamiento de pila, etc.) imprimen un mensaje en stderr y terminan con código `1`.
 
 - **`|` no puede usarse como OR lógico dentro de `[...]`**: Debido a que `|` dentro de corchetes se interpreta como separador de comprensión de vectores, escribir `[a | b]` como un vector de un elemento conteniendo el OR de `a` y `b` no está soportado. Esta es una concesión de diseño deliberada.
 
@@ -260,11 +320,14 @@ El compilador satisface la interfaz de calificación automatizada:
 
 ## Pruebas
 
-El proyecto incluye 297 pruebas unitarias distribuidas en cuatro crates:
+### Tests Unitarios
+
+El proyecto incluye **297 pruebas unitarias** distribuidas en cuatro crates:
 
 - **`hulk_lexer`** (63 pruebas): Tipos de tokens, reconocimiento de palabras clave, desambiguación de operadores, manejo de secuencias de escape en cadenas y casos de error.
 - **`hulk_parser`** (82 pruebas): Parseo de expresiones, precedencia de operadores, todas las formas de declaración y casos de error.
 - **`hulk_semantic`** (77 pruebas): Verificación de tipos para todos los operadores, llamadas a funciones, instanciación de clases, herencia, subtipado de protocolos y detección de errores.
 - **`hulk_interpreter`** (75 pruebas): Evaluación completa de expresiones, control de flujo, funciones, clases y biblioteca estándar.
 
-Todas las 297 pruebas pasan. Las pruebas se ejecutan con `cargo test` desde la raíz del workspace.
+Todas las 297 pruebas pasan (`cargo test --release`).
+
