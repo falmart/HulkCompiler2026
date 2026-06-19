@@ -58,10 +58,12 @@ pub enum TokenKind {
     With,
     As,
     Null,
-    Protocol, // 'protocol' keyword
-    Def,      // 'def' keyword (macro definitions)
-    Default,  // 'default' keyword (macro match fallback)
-    Dollar,   // $ (macro captured-variable prefix)
+    Protocol,  // 'protocol' keyword
+    Interface, // 'interface' keyword (alias for protocol)
+    Def,       // 'def' keyword (macro definitions)
+    Define,    // 'define' keyword (macro/function shorthand)
+    Default,   // 'default' keyword (macro match fallback)
+    Dollar,    // $ (macro captured-variable prefix)
 
     // ── Arithmetic operators ─────────────────────────────────────────────────
     Plus,     // +

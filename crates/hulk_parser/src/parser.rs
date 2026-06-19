@@ -47,6 +47,12 @@ impl Parser {
         std::mem::discriminant(self.peek()) == std::mem::discriminant(kind)
     }
 
+    fn check_at(&self, pos: usize, kind: &TokenKind) -> bool {
+        self.tokens.get(pos)
+            .map(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
+            .unwrap_or(false)
+    }
+
     fn matches(&mut self, kind: &TokenKind) -> bool {
         if self.check(kind) {
             self.advance();
@@ -106,16 +112,20 @@ impl Parser {
                 TokenKind::Function => functions.push(self.parse_function_decl()?),
                 // 'class' and 'type' both introduce class declarations
                 TokenKind::Class | TokenKind::Type => classes.push(self.parse_class_decl()?),
-                TokenKind::Protocol => {
+                TokenKind::Protocol | TokenKind::Interface => {
                     if let Some(p) = self.parse_protocol_decl()? {
                         top_level_protocols.push(p);
                     }
                 }
-                // 'def' introduces a macro — parse and skip (not executed)
+                // 'def' introduces a macro with AST substitution semantics
                 TokenKind::Def => {
                     if let Some(m) = self.skip_macro_decl()? {
                         macros.push(m);
                     }
+                }
+                // 'define' introduces a call-by-name macro
+                TokenKind::Define => {
+                    macros.push(self.parse_define_decl()?);
                 }
                 _ => {
                     let expr = self.parse_expr()?;
@@ -229,6 +239,35 @@ impl Parser {
     }
 }
 
+// ── Define declarations ───────────────────────────────────────────────────────
+
+impl Parser {
+    /// Parse `define name(params): RetType -> body;` or `define name(params): RetType { body }`
+    /// Produces a MacroDecl with all params treated as ByName (lazy/call-by-name expansion).
+    fn parse_define_decl(&mut self) -> Result<MacroDecl, ParseError> {
+        let start = self.span();
+        self.expect(&TokenKind::Define, "'define'")?;
+        let (name, _) = self.expect_ident("define name")?;
+        self.expect(&TokenKind::LParen, "'('")?;
+        let raw_params = self.parse_params()?;
+        self.expect(&TokenKind::RParen, "')'")?;
+        // optional return type (ignored at runtime)
+        if self.matches(&TokenKind::Colon) {
+            self.parse_type_expr()?;
+        }
+        let body = self.parse_body()?;
+        let span = Span::new(start.start, body.span.end, start.line, start.col);
+        // Convert Param → MacroParam (all ByName for call-by-name expansion)
+        let params = raw_params.into_iter().map(|p| MacroParam {
+            name: p.name,
+            kind: MacroParamKind::ByName,
+            type_ann: p.type_ann,
+            span: p.span,
+        }).collect();
+        Ok(MacroDecl { name, params, body, span })
+    }
+}
+
 // ── Declarations ─────────────────────────────────────────────────────────────
 
 impl Parser {
@@ -294,7 +333,10 @@ impl Parser {
     /// Parse 'protocol Name [extends P1, P2] { method(params): RetType; ... }'
     fn parse_protocol_decl(&mut self) -> Result<Option<ProtocolDecl>, ParseError> {
         let start = self.span();
-        self.expect(&TokenKind::Protocol, "'protocol'")?;
+        // Accept both 'protocol' and 'interface'
+        if !self.matches(&TokenKind::Protocol) {
+            self.expect(&TokenKind::Interface, "'protocol' or 'interface'")?;
+        }
         let (name, _) = self.expect_ident("protocol name")?;
 
         // optional 'extends Proto1, Proto2, ...'
@@ -342,7 +384,25 @@ impl Parser {
 
         let (name, name_span) = self.expect_ident("attribute or method name")?;
 
-        // ':=' or '=' for attribute initializer
+        // name: Type = init  (typed attribute)
+        if self.check(&TokenKind::Colon) && !self.check_at(self.pos + 1, &TokenKind::LParen) {
+            self.advance(); // consume ':'
+            let _type_ann = self.parse_type_expr()?; // parse but we don't store separately
+            // expect '=' or ':='
+            if !self.matches(&TokenKind::Eq) && !self.matches(&TokenKind::ColonEq) {
+                return Err(ParseError::Unexpected {
+                    expected: "'=' after type annotation".into(),
+                    got: self.peek().clone(),
+                    span: self.span(),
+                });
+            }
+            let init = self.parse_expr()?;
+            self.expect(&TokenKind::Semicolon, "';' after attribute")?;
+            let span = Span::new(start.start, init.span.end, start.line, start.col);
+            return Ok(ClassMember::Attribute { name, init, span });
+        }
+
+        // ':=' or '=' for attribute initializer (no type annotation)
         if self.matches(&TokenKind::ColonEq) || self.matches(&TokenKind::Eq) {
             let init = self.parse_expr()?;
             self.expect(&TokenKind::Semicolon, "';' after attribute")?;
@@ -714,6 +774,8 @@ impl Parser {
             TokenKind::For   => return self.parse_for(),
             TokenKind::Case  => return self.parse_case(),
             TokenKind::With  => return self.parse_with(),
+            // 'function' as anonymous expression: function(params): T -> body
+            TokenKind::Function => return self.parse_anon_function(),
             _ => {}
         }
 
@@ -915,6 +977,32 @@ impl Parser {
     }
 }
 
+// ── Anonymous function expression ────────────────────────────────────────────
+
+impl Parser {
+    /// Parse `function(params): RetType -> body` or `function(params): RetType { body }` as Lambda.
+    /// Unlike `parse_body`, does NOT require ';' after '->': the body is just an expression.
+    fn parse_anon_function(&mut self) -> Result<ExprS, ParseError> {
+        let start = self.span();
+        self.expect(&TokenKind::Function, "'function'")?;
+        self.expect(&TokenKind::LParen, "'('")?;
+        let params = self.parse_params()?;
+        self.expect(&TokenKind::RParen, "')'")?;
+        // optional return type annotation (ignored at runtime)
+        if self.matches(&TokenKind::Colon) {
+            self.parse_type_expr()?;
+        }
+        // Body: '->' or '=>' followed by expr (no ';' required), or a block
+        let body = if self.matches(&TokenKind::Arrow) || self.matches(&TokenKind::DArrow) {
+            self.parse_expr()?
+        } else {
+            self.parse_block()?
+        };
+        let span = Span::new(start.start, body.span.end, start.line, start.col);
+        Ok(Spanned::new(Expr::Lambda { params, body: Box::new(body) }, span))
+    }
+}
+
 // ── Special expression forms ──────────────────────────────────────────────────
 
 impl Parser {
@@ -1077,16 +1165,60 @@ impl Parser {
         self.expect(&TokenKind::New, "'new'")?;
         let (type_name, _) = self.expect_ident("type name")?;
 
-        if self.matches(&TokenKind::LBracket) {
-            // new T[size] [{init}]
+        if self.check(&TokenKind::LBracket) {
+            // Consume optional '[]' type suffixes: new Number[][] means array of arrays
+            // Each empty [] means one extra array wrapping on the element type.
+            // Encode depth into type_name: "Number[]" for new Number[][n].
+            let mut extra_dims = 0usize;
+            while self.check(&TokenKind::LBracket)
+                && self.check_at(self.pos + 1, &TokenKind::RBracket)
+            {
+                self.advance(); // consume '['
+                self.advance(); // consume ']'
+                extra_dims += 1;
+            }
+            let type_name = if extra_dims > 0 {
+                type_name + &"[]".repeat(extra_dims)
+            } else {
+                type_name
+            };
+            // Now expect [size]
+            self.expect(&TokenKind::LBracket, "'['")?;
             let size = self.parse_expr()?;
             let end = self.expect(&TokenKind::RBracket, "']'")?;
+
+            // Optional init block: { i -> expr } or { expr }
             let init = if self.check(&TokenKind::LBrace) {
-                let block = self.parse_block()?;
-                Some(Box::new(block))
+                // Peek: is it an index-lambda `{ ident -> expr }` ?
+                let is_index_lambda = matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Ident(_))
+                ) && matches!(
+                    self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                    Some(TokenKind::Arrow)
+                );
+                if is_index_lambda {
+                    self.advance(); // consume '{'
+                    let (var, _) = self.expect_ident("index variable")?;
+                    self.expect(&TokenKind::Arrow, "'->'")?;
+                    let body = self.parse_expr()?;
+                    let end2 = self.expect(&TokenKind::RBrace, "'}'")?;
+                    let span2 = Span::new(start.start, end2.span.end, start.line, start.col);
+                    Some(Box::new(Spanned::new(
+                        Expr::Lambda {
+                            params: vec![Param { name: var, type_ann: None, span: span2 }],
+                            body: Box::new(body),
+                        },
+                        span2,
+                    )))
+                } else {
+                    let block = self.parse_block()?;
+                    Some(Box::new(block))
+                }
             } else {
                 None
             };
+
             let end_pos = init.as_ref().map(|b| b.span.end).unwrap_or(end.span.end);
             let span = Span::new(start.start, end_pos, start.line, start.col);
             return Ok(Spanned::new(
@@ -1108,17 +1240,43 @@ impl Parser {
         let start = self.span();
         self.expect(&TokenKind::LBrace, "'{'")?;
 
-        let mut stmts: Vec<ExprS> = Vec::new();
+        // Empty block
+        if self.check(&TokenKind::RBrace) {
+            let end = self.advance();
+            let span = Span::new(start.start, end.span.end, start.line, start.col);
+            return Ok(Spanned::new(Expr::Block(vec![]), span));
+        }
 
-        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-            let expr = self.parse_expr()?;
-            if self.matches(&TokenKind::Semicolon) {
-                stmts.push(expr);
-            } else {
-                // trailing expr without ';' — last value
-                stmts.push(expr);
-                break;
+        let first = self.parse_expr()?;
+
+        // {expr, expr, ...} — array literal (comma-separated, no semicolons)
+        if self.check(&TokenKind::Comma) {
+            let mut elements = vec![first];
+            while self.matches(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) { break; } // trailing comma
+                elements.push(self.parse_expr()?);
             }
+            let end = self.expect(&TokenKind::RBrace, "'}'")?;
+            let span = Span::new(start.start, end.span.end, start.line, start.col);
+            return Ok(Spanned::new(Expr::VecLit { elements }, span));
+        }
+
+        // Regular block
+        let mut stmts = vec![];
+        if self.matches(&TokenKind::Semicolon) {
+            stmts.push(first);
+            while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                let expr = self.parse_expr()?;
+                if self.matches(&TokenKind::Semicolon) {
+                    stmts.push(expr);
+                } else {
+                    stmts.push(expr);
+                    break;
+                }
+            }
+        } else {
+            // single expression or trailing without ';'
+            stmts.push(first);
         }
 
         let end = self.expect(&TokenKind::RBrace, "'}'")?;

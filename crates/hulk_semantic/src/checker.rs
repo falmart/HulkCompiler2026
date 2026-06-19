@@ -153,7 +153,8 @@ impl Checker {
             },
             TypeExpr::Array(inner) => Type::Array(Box::new(self.resolve_type(inner))),
             // T* iterable treated as Array<T> for type-checking purposes
-            TypeExpr::Iterable(inner) => Type::Array(Box::new(self.resolve_type(inner))),
+            // T* (iterable) — accept both arrays and iterator objects; skip deep checking
+            TypeExpr::Iterable(_) => Type::Unknown,
             // Function types treated as Object (first-class functions not fully typed yet)
             TypeExpr::Function { .. } => Type::Object,
         }
@@ -960,7 +961,20 @@ impl Checker {
                 if let Some(init_block) = init {
                     self.check_expr(init_block, env);
                 }
-                let elem_ty = self.resolve_type(&TypeExpr::Named(type_name.clone()));
+                // type_name may encode extra array dims: "Number[]" → Array(Number)
+                let elem_ty = {
+                    let mut s = type_name.as_str();
+                    let mut depth = 0usize;
+                    while s.ends_with("[]") {
+                        s = &s[..s.len() - 2];
+                        depth += 1;
+                    }
+                    let mut t = self.resolve_type(&TypeExpr::Named(s.to_string()));
+                    for _ in 0..depth {
+                        t = Type::Array(Box::new(t));
+                    }
+                    t
+                };
                 Type::Array(Box::new(elem_ty))
             }
 
@@ -999,11 +1013,18 @@ impl Checker {
 
             Expr::For { var, iter, body } => {
                 let iter_ty = self.check_expr(iter, env);
-                // infer element type from array
+                // check that iterable is Array, Object (iterator protocol), or Unknown
                 let elem_ty = match &iter_ty {
                     Type::Array(elem) => *elem.clone(),
-                    Type::Unknown => Type::Unknown,
-                    _ => Type::Object,
+                    Type::Unknown | Type::Object | Type::Named(_) => Type::Unknown,
+                    other => {
+                        self.errors.push(SemanticError::TypeMismatch {
+                            expected: Type::Array(Box::new(Type::Unknown)),
+                            got: other.clone(),
+                            span: iter.span,
+                        });
+                        Type::Unknown
+                    }
                 };
                 env.push();
                 env.define(var, elem_ty);

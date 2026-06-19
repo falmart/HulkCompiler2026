@@ -267,9 +267,11 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "null"     => TokenKind::Null,
         "true"     => TokenKind::True,
         "false"    => TokenKind::False,
-        "protocol" => TokenKind::Protocol,
-        "def"      => TokenKind::Def,
-        "default"  => TokenKind::Default,
+        "protocol"  => TokenKind::Protocol,
+        "interface" => TokenKind::Interface,
+        "def"       => TokenKind::Def,
+        "define"    => TokenKind::Define,
+        "default"   => TokenKind::Default,
         _          => return None,
     })
 }

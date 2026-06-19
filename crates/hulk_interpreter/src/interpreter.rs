@@ -8,7 +8,7 @@ use crate::env::Env;
 use crate::error::RuntimeError;
 use crate::value::{HulkObject, Value};
 
-const MAX_CALL_DEPTH: usize = 100;
+const MAX_CALL_DEPTH: usize = 500;
 
 pub struct Interpreter {
     classes:    HashMap<String, ClassDecl>,
@@ -176,11 +176,25 @@ impl Interpreter {
                     });
                 };
                 let len = n as usize;
-                let init_val = match init {
-                    Some(blk) => self.eval(blk, env)?,
-                    None      => Value::Null,
-                };
-                Ok(Value::Array(Rc::new(RefCell::new(vec![init_val; len]))))
+                match init {
+                    Some(blk) => {
+                        // If init is a Lambda (from `{ i -> expr }` syntax), call it per index
+                        if let Expr::Lambda { .. } = &blk.node {
+                            let closure_val = self.eval(blk, env)?;
+                            if let Value::Closure(cdata) = closure_val {
+                                let mut elems = Vec::with_capacity(len);
+                                for i in 0..len {
+                                    let v = self.call_closure(&cdata, vec![Value::Number(i as f64)])?;
+                                    elems.push(v);
+                                }
+                                return Ok(Value::Array(Rc::new(RefCell::new(elems))));
+                            }
+                        }
+                        let init_val = self.eval(blk, env)?;
+                        Ok(Value::Array(Rc::new(RefCell::new(vec![init_val; len]))))
+                    }
+                    None => Ok(Value::Array(Rc::new(RefCell::new(vec![Value::Null; len])))),
+                }
             }
 
             Expr::Case { expr, arms } => {
@@ -212,19 +226,33 @@ impl Interpreter {
 
             Expr::For { var, iter, body } => {
                 let iter_val = self.eval(iter, env)?;
-                let elements = match &iter_val {
-                    Value::Array(rc) => rc.borrow().clone(),
+                match &iter_val {
+                    Value::Array(rc) => {
+                        let elements = rc.borrow().clone();
+                        env.push();
+                        for elem in elements {
+                            env.define(var, elem);
+                            self.eval(body, env)?;
+                        }
+                        env.pop();
+                    }
+                    Value::Object(_) => {
+                        // Generator/iterator protocol: call next() until false, current() for value
+                        env.push();
+                        loop {
+                            let has_next = self.call_method(iter_val.clone(), "next", vec![])?;
+                            if !has_next.is_truthy() { break; }
+                            let current = self.call_method(iter_val.clone(), "current", vec![])?;
+                            env.define(var, current);
+                            self.eval(body, env)?;
+                        }
+                        env.pop();
+                    }
                     other => return Err(RuntimeError::TypeMismatch {
-                        expected: "Array".into(),
+                        expected: "Array or iterable Object".into(),
                         got: other.type_name().into(),
                     }),
-                };
-                env.push();
-                for elem in elements {
-                    env.define(var, elem);
-                    self.eval(body, env)?;
                 }
-                env.pop();
                 Ok(Value::Null)
             }
 
