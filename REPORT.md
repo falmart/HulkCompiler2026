@@ -115,7 +115,7 @@ parse_expr
 
 **Expresiones de control de flujo como sub-expresiones**: `if`, `let`, `while`, `for`, `case` y `with` se permiten como sub-expresiones (ej. `total + if (cond) 1 else 0`). Esto se maneja en `parse_primary` que enruta a la función de parseo apropiada antes de caer al parseo de literales e identificadores.
 
-**Omisión de macros `def`**: La palabra clave `def` introduce declaraciones de macros con prefijos especiales de argumentos (`$`, `*`, `@`). Dado que los macros de HULK no se llaman en la suite de pruebas y su semántica es compleja, el parser consume todo el bloque `def nombre(...) { ... }` contando llaves sin construir un AST para el cuerpo. Esto permite que el resto del archivo se parsee y ejecute correctamente.
+**Macros `def`**: La palabra clave `def` introduce declaraciones de macros con prefijos especiales de parámetros (`@` por referencia, `*` por nombre, `$` nombre de variable, sin prefijo por valor). El parser construye un `MacroDecl` completo con su lista de `MacroParam` y el AST del cuerpo. Dentro del cuerpo, `@param` y `$param` se parsean como `Expr::MacroArgRef` y `Expr::MacroArgName` respectivamente. La forma `match(expr) { case (pat) => cuerpo; ... default => cuerpo; }` se parsea como `Expr::MacroMatch`, permitiendo selección de ramas en tiempo de macro. La detección de `match(...)` ocurre en la rama `Ident("match")` de `parse_primary`, de manera análoga a cómo `base(args)` se detecta sin reservar la palabra clave en el lexer.
 
 ---
 
@@ -131,6 +131,7 @@ La primera pasada (`collect_declarations`) registra todos los nombres de nivel s
 - Las clases se registran con sus parámetros de constructor, clase base y firmas de métodos.
 - Los protocolos se registran con sus firmas de métodos y relaciones `extends`.
 - Las constantes incorporadas (`PI`, `E`) y las funciones incorporadas (`print`, `sin`, `cos`, `sqrt`, `exp`, `log`, `rand`, `range`) se pre-cargan en el entorno.
+- Los macros se registran en la tabla de funciones con parámetros `Object` y tipo de retorno `Object`, de modo que el verificador acepta llamadas a macros sin reportar "función no definida".
 
 Este enfoque de dos pasadas permite funciones mutuamente recursivas y referencias hacia adelante a nombres de clases sin requerir un orden de declaración específico.
 
@@ -178,6 +179,10 @@ Se usa `Rc<RefCell<...>>` para estado mutable compartido (los objetos y arreglos
 **Funciones incorporadas**: `print`, `sin`, `cos`, `tan`, `sqrt`, `exp`, `log`, `rand`, `range` (variantes de 1 y 2 argumentos) se manejan como casos especiales en el evaluador de llamadas a funciones. `range(n)` produce `[0, 1, ..., n-1]` y `range(inicio, fin)` produce `[inicio, ..., fin-1]`.
 
 **Bucles `for`**: Iteran sobre arreglos (el único tipo iterable en tiempo de ejecución). Cada elemento se vincula en un nuevo ámbito para la evaluación del cuerpo.
+
+**Ejecución de macros**: Cuando el evaluador encuentra `Expr::Call` cuyo nombre corresponde a un macro declarado, intercepta la llamada antes de evaluar los argumentos. Se construyen dos mapas de sustitución: `vsubs` (nombre de parámetro → `ExprS` de reemplazo) para parámetros ByRef y ByName, y `nsubs` (nombre de parámetro → nombre de variable del llamador como cadena) para parámetros VarName. Los parámetros por valor se evalúan normalmente y se vinculan en un nuevo ámbito. La función `substitute()` recorre recursivamente el AST del cuerpo del macro y aplica las sustituciones: `Expr::Var(p)` se reemplaza con la expresión del argumento (ByName) o con `Expr::Var(caller_var)` (ByRef); `Expr::MacroArgRef(p)` se reemplaza igual que `Var(p)` ByRef; `Expr::MacroArgName(p)` se reemplaza con `Expr::Str(caller_var)`. El AST resultante se evalúa en el entorno del llamador, lo que implementa correctamente la semántica de sustitución textual de macros, incluyendo la mutación de variables del llamador a través de parámetros `@byref`.
+
+**Coincidencia de patrones de macros (`MacroMatch`)**: `match(expr) { case (pat) => cuerpo; ... default => cuerpo; }` evalúa el sujeto y lo compara secuencialmente con cada patrón usando igualdad de valor (`==`). La primera rama que coincide se evalúa; si ninguna coincide, se evalúa el cuerpo `default`.
 
 ---
 
@@ -227,7 +232,9 @@ El compilador satisface la interfaz de calificación automatizada:
 | Anotaciones de tipo función `(T) -> R` | ✅ |
 | Expresiones lambda `(x) => expr` | ✅ |
 | Funciones de primera clase / funciones de orden superior | ✅ |
-| Declaraciones de macro `def` (parseadas, no ejecutadas) | ✅ |
+| Declaraciones de macro `def` con parámetros `@`, `*`, `$`, por valor | ✅ |
+| Ejecución de macros con sustitución AST | ✅ |
+| `match(expr) { case ... default ... }` dentro de macros | ✅ |
 | Constantes incorporadas `PI`, `E` | ✅ |
 | Funciones matemáticas (`sin`, `cos`, `sqrt`, `exp`, `log`, `rand`) | ✅ |
 | `range(n)` y `range(inicio, fin)` | ✅ |
@@ -237,13 +244,11 @@ El compilador satisface la interfaz de calificación automatizada:
 
 ## Limitaciones Conocidas
 
-- **Los macros no se ejecutan**: Las declaraciones de macros `def` se parsean y almacenan pero no son invocables en tiempo de ejecución. El parser omite el cuerpo del macro contando llaves sin construir un AST completo. Esto significa que `def repeat(...)` y `def swap(...)` pueden definirse pero llamarlos produciría un error en tiempo de ejecución.
-
 - **Sin generación de código**: El compilador es un intérprete de árbol de sintaxis, no un generador de código. El archivo `./output` es un script de shell que re-invoca el intérprete; no produce código máquina nativo ni bytecode. El rendimiento es proporcional al tamaño del AST.
 
-- **La coincidencia de patrones de macros (`match`) no está implementada**: La forma `match(expr) { case (patrón) => ...; default => ...; }` usada dentro de cuerpos `def` no se parsea como una construcción de primer nivel; se omite junto con el cuerpo del macro.
-
 - **La verificación de tipos de función es superficial**: Los parámetros anotados con tipos de función `(T) -> R` se tratan como `Object` por el verificador de tipos. Los errores de tipo en argumentos de funciones de orden superior (ej. pasar una función `Number -> Number` donde se espera `Number -> Boolean`) no se detectan.
+
+- **Los cuerpos de macros no se verifican semánticamente**: Dado que los macros son polimórficos (el mismo cuerpo puede aplicarse a tipos distintos según el sitio de llamada), el verificador semántico registra los macros en la tabla de funciones con parámetros `Object` pero no verifica el cuerpo de forma aislada. Los errores de tipo dentro del cuerpo se detectarían solo en tiempo de ejecución.
 
 - **Sin recolección de basura**: La memoria se gestiona mediante el sistema de propiedad de Rust y el conteo de referencias `Rc`. Las referencias circulares entre objetos (ej. una lista enlazada circular) causarían pérdidas de memoria. En la práctica, los programas HULK de la suite de pruebas no crean ciclos.
 
